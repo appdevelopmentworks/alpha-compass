@@ -1,0 +1,40 @@
+[package]
+name = "alpha-compass"
+version = "0.1.0"
+description = "Japan-first financial monitoring desktop app (Tauri Core)."
+authors = ["alpha-compass"]
+edition = "2021"
+rust-version = "1.77"
+
+# Tauri 2 layout: a library crate holds `run()` (mobile-ready) and `main.rs`
+# is a thin wrapper that calls it.
+[lib]
+name = "alpha_compass_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Blocking localhost HTTP client for the Rust -> sidecar calls. No TLS needed
+# (127.0.0.1 plain HTTP), so default features (rustls) are disabled to keep the
+# build lean.
+ureq = { version = "2", default-features = false, features = ["json"] }
+# Rust is the SOLE owner/writer of both stores (architecture §1).
+duckdb = { version = "1", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Random per-session sidecar token.
+uuid = { version = "1", features = ["v4"] }
+# UTC RFC3339 timestamps for freshness labels.
+time = { version = "0.3", features = ["std", "formatting", "parsing"] }
+# Async timers for the scheduler (tauri already runs on tokio).
+tokio = { version = "1", features = ["time"] }
+# OS keychain for credentials (never stored in DB/plaintext).
+keyring = { version = "3", features = ["windows-native"] }
+
+[profile.dev]
+# DuckDB's bundled C++ amalgamation is large; keep incremental dev builds sane.
+incremental = true

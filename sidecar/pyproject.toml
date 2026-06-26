@@ -1,0 +1,18 @@
+[project]
+name = "alpha-compass-sidecar"
+version = "0.1.0"
+description = "Stateless fetch + AI sidecar for alpha-compass (data adapters, normalization, AI cascade)."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "httpx>=0.27",
+    "yfinance>=0.2.40",
+]
+
+# The sidecar is a runnable service, not a distributable library: tell uv to
+# manage the environment without building/installing the project itself. The
+# `app` package is imported via the working directory (set by the Rust spawner).
+[tool.uv]
+package = false

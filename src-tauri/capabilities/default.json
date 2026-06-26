@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main window. App-defined commands (ping_sidecar, get_db_status) do not require ACL entries.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,58 @@
+# --- Node / Next.js (frontend) ---
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.npm/
+.pnp.*
+.yarn/
+
+# --- Rust / Tauri ---
+src-tauri/target/
+target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# --- Python sidecar (uv) ---
+sidecar/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+.uv/
+.python-version
+build/
+*.spec.bak
+
+# --- PyInstaller output ---
+sidecar/dist/
+sidecar/build/
+
+# --- Local data / DB (do NOT commit) ---
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.sqlite3
+*.db
+data/
+.cache/
+
+# --- Secrets / env (dev only, never commit) ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials*.json
+
+# --- Logs ---
+*.log
+logs/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
