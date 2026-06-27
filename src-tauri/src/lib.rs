@@ -14,7 +14,6 @@ mod sidecar;
 mod store;
 mod util;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::Manager;
@@ -38,27 +37,6 @@ fn fatal(e: impl std::fmt::Display) -> Box<dyn std::error::Error> {
     ))
 }
 
-/// Resolve the sidecar project directory.
-fn resolve_sidecar_dir() -> PathBuf {
-    // Dev: `<repo>/src-tauri` (CARGO_MANIFEST_DIR) sits next to `<repo>/sidecar`.
-    #[cfg(debug_assertions)]
-    {
-        return PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .map(|p| p.join("sidecar"))
-            .unwrap_or_else(|| PathBuf::from("sidecar"));
-    }
-    // Release: alongside the executable. PyInstaller packaging lands in a later
-    // session; for now resolve a sibling `sidecar/` directory.
-    #[cfg(not(debug_assertions))]
-    {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("sidecar")))
-            .unwrap_or_else(|| PathBuf::from("sidecar"))
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -71,9 +49,15 @@ pub fn run() {
             eprintln!("[alpha-compass] SQLite: {}", status.sqlite_path);
 
             // 2) Spawn the Python sidecar and wait for it to become healthy.
-            let sidecar_dir = resolve_sidecar_dir();
-            eprintln!("[alpha-compass] sidecar dir: {}", sidecar_dir.display());
-            let manager = Arc::new(SidecarManager::spawn(&sidecar_dir).map_err(fatal)?);
+            //    Non-fatal: if it can't start, the app still opens and surfaces
+            //    the error rather than exiting.
+            let manager = Arc::new(match SidecarManager::spawn() {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("[alpha-compass] sidecar spawn failed: {e}");
+                    SidecarManager::disabled(format!("サイドカーを起動できませんでした: {e}"))
+                }
+            });
 
             let healthy = manager.wait_until_healthy(40, 250);
             eprintln!("[alpha-compass] sidecar healthy: {healthy}");
@@ -116,7 +100,8 @@ pub fn run() {
             ipc::get_settings,
             ipc::set_setting,
             ipc::set_credential,
-            ipc::get_credential_status
+            ipc::get_credential_status,
+            ipc::get_ai_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

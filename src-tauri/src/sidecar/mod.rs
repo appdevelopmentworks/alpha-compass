@@ -6,7 +6,9 @@
 //! the sidecar returns 401 on mismatch (architecture §4.3).
 
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+#[cfg(debug_assertions)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -29,6 +31,17 @@ pub struct SidecarHealth {
     pub time: String,
 }
 
+/// Body returned by the sidecar's `GET /ai/status`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SidecarAiStatus {
+    pub local_available: bool,
+    pub local_endpoint: Option<String>,
+    pub local_model: Option<String>,
+    #[serde(default)]
+    pub claude_configured: bool,
+    pub claude_available: bool,
+}
+
 /// Outcome of a frontend → Rust → sidecar → frontend round-trip.
 #[derive(Debug, Clone, Serialize)]
 pub struct PingResult {
@@ -48,40 +61,24 @@ pub struct SidecarManager {
     port: u16,
     token: String,
     child: Mutex<Option<Child>>,
+    /// Set when the sidecar could not be started; methods then fail gracefully
+    /// instead of the app refusing to open.
+    disabled_reason: Option<String>,
 }
 
 impl SidecarManager {
     /// Pick a free port, generate a token, and spawn the sidecar.
     ///
-    /// In dev it runs the project's venv interpreter directly (so the child IS
-    /// the server and can be killed cleanly); if no venv is present it falls
-    /// back to `uv run`.
-    pub fn spawn(sidecar_dir: &Path) -> Result<Self, String> {
+    /// Release/installed builds run the bundled standalone binary
+    /// (`alpha-compass-sidecar.exe`, next to the app). Dev runs from source via
+    /// the venv interpreter (so iteration doesn't require rebuilding the binary)
+    /// or falls back to `uv run`.
+    pub fn spawn() -> Result<Self, String> {
         let port = pick_free_port()?;
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
 
-        let mut cmd = match venv_python(sidecar_dir) {
-            Some(python) => {
-                let mut c = Command::new(python);
-                c.arg("-m").arg("uvicorn");
-                c
-            }
-            None => {
-                let mut c = Command::new("uv");
-                c.arg("run").arg("uvicorn");
-                c
-            }
-        };
-
-        cmd.current_dir(sidecar_dir)
-            .arg("app.main:app")
-            .arg("--host")
-            .arg(HOST)
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--log-level")
-            .arg("info")
-            .env(TOKEN_ENV, &token)
+        let mut cmd = build_command(port)?;
+        cmd.env(TOKEN_ENV, &token)
             .env(HOST_ENV, HOST)
             .env(PORT_ENV, port.to_string());
 
@@ -106,7 +103,20 @@ impl SidecarManager {
             port,
             token,
             child: Mutex::new(Some(child)),
+            disabled_reason: None,
         })
+    }
+
+    /// A non-functional manager used when the sidecar can't start, so the app
+    /// still opens and surfaces the error in the UI instead of exiting.
+    pub fn disabled(reason: String) -> Self {
+        Self {
+            host: HOST.to_string(),
+            port: 0,
+            token: String::new(),
+            child: Mutex::new(None),
+            disabled_reason: Some(reason),
+        }
     }
 
     fn base_url(&self) -> String {
@@ -119,6 +129,9 @@ impl SidecarManager {
         &self,
         source: &str,
     ) -> Result<crate::store::models::NormalizedBatch, String> {
+        if let Some(r) = &self.disabled_reason {
+            return Err(r.clone());
+        }
         let url = format!("{}/fetch/{}", self.base_url(), source);
         let resp = ureq::post(&url)
             .set("Authorization", &format!("Bearer {}", self.token))
@@ -132,8 +145,26 @@ impl SidecarManager {
             .map_err(|e| format!("decode {source} batch: {e}"))
     }
 
+    /// Detected local LLM + Claude availability from `GET /ai/status`.
+    pub fn fetch_ai_status(&self) -> Result<SidecarAiStatus, String> {
+        if let Some(r) = &self.disabled_reason {
+            return Err(r.clone());
+        }
+        let url = format!("{}/ai/status", self.base_url());
+        let resp = ureq::get(&url)
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .timeout(Duration::from_secs(5))
+            .call()
+            .map_err(|e| format!("sidecar /ai/status: {e}"))?;
+        resp.into_json::<SidecarAiStatus>()
+            .map_err(|e| format!("decode ai status: {e}"))
+    }
+
     /// Generate the daily brief via `POST /ai/brief`. Returns (text, tier).
     pub fn fetch_brief(&self, payload: &serde_json::Value) -> Result<(String, String), String> {
+        if let Some(r) = &self.disabled_reason {
+            return Err(r.clone());
+        }
         #[derive(serde::Deserialize)]
         struct BriefResp {
             text: String,
@@ -156,6 +187,9 @@ impl SidecarManager {
 
     /// Poll `/health` until reachable or attempts run out.
     pub fn wait_until_healthy(&self, attempts: u32, delay_ms: u64) -> bool {
+        if self.disabled_reason.is_some() {
+            return false;
+        }
         for _ in 0..attempts {
             if self.ping().reachable {
                 return true;
@@ -167,6 +201,17 @@ impl SidecarManager {
 
     /// Perform a single authenticated `GET /health`.
     pub fn ping(&self) -> PingResult {
+        if let Some(r) = &self.disabled_reason {
+            return PingResult {
+                reachable: false,
+                http_status: 0,
+                port: self.port,
+                round_trip_ms: 0,
+                checked_at: now_rfc3339(),
+                health: None,
+                error: Some(r.clone()),
+            };
+        }
         let url = format!("{}/health", self.base_url());
         let checked_at = now_rfc3339();
         let started = Instant::now();
@@ -245,7 +290,77 @@ fn pick_free_port() -> Result<u16, String> {
     Ok(port)
 }
 
+/// Build the launch command for the sidecar.
+///
+/// Dev (debug builds) prefers running from source so the venv reflects code
+/// changes without rebuilding; otherwise the bundled standalone binary is used.
+fn build_command(port: u16) -> Result<Command, String> {
+    #[cfg(debug_assertions)]
+    {
+        if let Some(dir) = dev_sidecar_dir() {
+            if dir.exists() {
+                return Ok(dev_command(&dir, port));
+            }
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = port; // dev-only; the bundled binary reads the port from the env
+
+    if let Some(exe) = bundled_sidecar_exe() {
+        // The standalone binary reads host/port/token from the environment.
+        return Ok(Command::new(exe));
+    }
+
+    Err("sidecar not found: no bundled binary and no dev source directory".to_string())
+}
+
+/// Bundled standalone sidecar binary next to the app executable (release).
+fn bundled_sidecar_exe() -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "alpha-compass-sidecar.exe"
+    } else {
+        "alpha-compass-sidecar"
+    };
+    let candidate = std::env::current_exe().ok()?.parent()?.join(name);
+    candidate.exists().then_some(candidate)
+}
+
+/// Dev source directory: `<repo>/sidecar` (only meaningful in debug builds).
+#[cfg(debug_assertions)]
+fn dev_sidecar_dir() -> Option<PathBuf> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.join("sidecar"))
+}
+
+/// Dev command: run uvicorn from the project's venv (or `uv run`).
+#[cfg(debug_assertions)]
+fn dev_command(sidecar_dir: &Path, port: u16) -> Command {
+    let mut cmd = match venv_python(sidecar_dir) {
+        Some(python) => {
+            let mut c = Command::new(python);
+            c.arg("-m").arg("uvicorn");
+            c
+        }
+        None => {
+            let mut c = Command::new("uv");
+            c.arg("run").arg("uvicorn");
+            c
+        }
+    };
+    cmd.current_dir(sidecar_dir)
+        .arg("app.main:app")
+        .arg("--host")
+        .arg(HOST)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--log-level")
+        .arg("info");
+    cmd
+}
+
 /// Path to the sidecar's virtualenv interpreter, if it exists.
+#[cfg(debug_assertions)]
 fn venv_python(sidecar_dir: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     let candidate = sidecar_dir.join(".venv").join("Scripts").join("python.exe");

@@ -27,6 +27,8 @@ from app.adapters import jquants as jquants_adapter
 from app.adapters import news as news_adapter
 from app.adapters import tdnet as tdnet_adapter
 from app.adapters import yfinance as yfinance_adapter
+from app.ai import claude as ai_claude
+from app.ai import local_qwen as ai_local
 from app.ai import router as ai_router
 from app.schemas.common import FetchRequest, NormalizedBatch
 
@@ -111,6 +113,19 @@ def ai_brief(payload: dict) -> dict:
     max_tier = payload.get("max_tier") or ai_router.DEFAULT_MAX_TIER
     text, tier = ai_router.brief(payload, max_tier)
     return {"text": text, "tier": tier}
+
+
+@app.get("/ai/status")
+def ai_status() -> dict:
+    """Report the detected local LLM (endpoint/model) and Claude availability."""
+    endpoint, model = ai_local.active_info()
+    return {
+        "local_available": endpoint is not None and model is not None,
+        "local_endpoint": endpoint,
+        "local_model": model,
+        "claude_configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "claude_available": ai_claude.available(),
+    }
 
 
 def main() -> None:

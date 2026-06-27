@@ -28,6 +28,12 @@ build/
 sidecar/dist/
 sidecar/build/
 
+# --- Nuitka output / bundled sidecar binary ---
+sidecar/build_nuitka/
+sidecar/server.build/
+sidecar/server.dist/
+src-tauri/binaries/*.exe
+
 # --- Local data / DB (do NOT commit) ---
 *.duckdb
 *.duckdb.wal

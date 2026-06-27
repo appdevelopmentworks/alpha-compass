@@ -148,6 +148,61 @@ pub fn get_credential_status() -> Result<Vec<CredentialStatus>, String> {
     Ok(creds::status())
 }
 
+/// Which AI provider is currently active (for the header indicator).
+#[derive(serde::Serialize)]
+pub struct AiStatus {
+    pub mode: String,     // ai_max_tier setting
+    pub provider: String, // "local" | "claude" | "rule"
+    pub label: String,    // human-readable, e.g. "ローカル: gemma4:latest"
+    pub detail: Option<String>,
+    pub local_available: bool,
+    pub local_endpoint: Option<String>,
+    pub local_model: Option<String>,
+    pub claude_available: bool,
+}
+
+#[tauri::command]
+pub async fn get_ai_status(state: State<'_, AppState>) -> Result<AiStatus, String> {
+    let store = state.store.clone();
+    let sidecar = state.sidecar.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mode = store
+            .read_setting("ai_max_tier")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "local".to_string());
+        let s = sidecar.fetch_ai_status()?;
+
+        // Mirror the router's resolution: local is preferred; Claude only in
+        // "claude" mode; otherwise rule.
+        let (provider, label) = if mode == "rule" {
+            ("rule", "ルール（LLM不使用）".to_string())
+        } else if s.local_available {
+            (
+                "local",
+                format!("ローカル: {}", s.local_model.clone().unwrap_or_default()),
+            )
+        } else if mode == "claude" && s.claude_available {
+            ("claude", "Claude".to_string())
+        } else {
+            ("rule", "ルール（フォールバック）".to_string())
+        };
+
+        Ok(AiStatus {
+            mode,
+            provider: provider.to_string(),
+            label,
+            detail: s.local_endpoint.clone(),
+            local_available: s.local_available,
+            local_endpoint: s.local_endpoint,
+            local_model: s.local_model,
+            claude_available: s.claude_available,
+        })
+    })
+    .await
+    .map_err(|e| format!("ai status join error: {e}"))?
+}
+
 /// Manually refresh one source (`source = "yfinance" | "fred" | "cot"`) or all
 /// US sources when `source` is omitted. Runs the blocking fetch off the UI
 /// thread via the blocking pool.

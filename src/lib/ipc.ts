@@ -348,6 +348,21 @@ export function getCredentialStatus(): Promise<CredentialStatus[]> {
   return invoke<CredentialStatus[]>('get_credential_status');
 }
 
+export interface AiStatus {
+  mode: string;
+  provider: string; // "local" | "claude" | "rule"
+  label: string;
+  detail: string | null;
+  local_available: boolean;
+  local_endpoint: string | null;
+  local_model: string | null;
+  claude_available: boolean;
+}
+
+export function getAiStatus(): Promise<AiStatus> {
+  return invoke<AiStatus>('get_ai_status');
+}
+
 /** Per-source last-fetched time + status. */
 export function getFreshness(): Promise<SourceMeta[]> {
   return invoke<SourceMeta[]>('get_freshness');

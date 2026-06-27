@@ -9,6 +9,7 @@ import DisclosuresView from '@/views/DisclosuresView';
 import AlertsView from '@/views/AlertsView';
 import CrossMarketView from '@/views/CrossMarketView';
 import SettingsView from '@/views/SettingsView';
+import AiStatusChip from '@/components/AiStatusChip';
 
 type Tab =
   | 'home'
@@ -39,6 +40,8 @@ export default function Home() {
       <header className="app__header">
         <span className="app__title">alpha-compass</span>
         <span className="app__subtitle">投資情報統合モニター</span>
+        <span className="app__spacer" />
+        <AiStatusChip />
       </header>
 
       <nav className="nav">
